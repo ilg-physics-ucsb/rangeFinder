@@ -100,6 +100,48 @@ void setup() {
 
 // the loop function runs over and over again forever
 void loop() {
+  updateRangeFinder() ;
+  updateButtons() ;
+  updateOptions() ;
+  updateDisplay() ;
+}
+//---------------------------------------------------------------------------------------------------------------------
+// Functions 
+//---------------------------------------------------------------------------------------------------------------------
+
+// Update the display
+void updateDisplay(){
+  // Only write to display when new text
+  if (displayFlag){
+    displayFlag = 0 ;
+
+    // Format the number to show
+    posBuff[0] = String( (int) floor(abs(pos)) % 10 )[0] ;
+    posBuff[1] = '.' ;
+    posBuff[2] = String( (int) floor(abs(pos)*10) % 10 )[0] ;
+    posBuff[3] = String( (int) floor(abs(pos)*100) % 10 )[0] ;
+    posBuff[4] = String( (int) floor(abs(pos)*1000) % 10 )[0] ;
+    display.setCursor(0, 0) ;   
+    display.print(posBuff) ;
+
+    if (vel<0){
+      velBuff[0] = '-' ;
+    } else {
+      velBuff[0] = '+' ;
+    }
+    velBuff[1] = String( (int) floor(abs(vel)) % 10 )[0] ;
+    velBuff[2] = '.' ;
+    velBuff[3] = String( (int) floor(abs(vel)*10) % 10 )[0] ;
+    velBuff[4] = String( (int) floor(abs(vel)*100) % 10 )[0] ;
+    velBuff[5] = String( (int) floor(abs(vel)*1000) % 10 )[0] ;
+    display.setCursor(0, 16) ;   
+    display.print(velBuff) ;
+    display.display() ;
+  }
+}
+
+// Update the distanced detected 
+void updateRangeFinder(){
   //Read data from rangeFinder if interrupt triggered
   if (interruptFlag){
     interruptFlag = 0 ;
@@ -133,35 +175,10 @@ void loop() {
       displayFlag = 1 ;
     }
   }
+}
 
-
-  if (displayFlag){
-    displayFlag = 0 ;
-
-    // Format the number to show
-    posBuff[0] = String( (int) floor(abs(pos)) % 10 )[0] ;
-    posBuff[1] = '.' ;
-    posBuff[2] = String( (int) floor(abs(pos)*10) % 10 )[0] ;
-    posBuff[3] = String( (int) floor(abs(pos)*100) % 10 )[0] ;
-    posBuff[4] = String( (int) floor(abs(pos)*1000) % 10 )[0] ;
-    display.setCursor(0, 0) ;   
-    display.print(posBuff) ;
-
-    if (vel<0){
-      velBuff[0] = '-' ;
-    } else {
-      velBuff[0] = '+' ;
-    }
-    velBuff[1] = String( (int) floor(abs(vel)) % 10 )[0] ;
-    velBuff[2] = '.' ;
-    velBuff[3] = String( (int) floor(abs(vel)*10) % 10 )[0] ;
-    velBuff[4] = String( (int) floor(abs(vel)*100) % 10 )[0] ;
-    velBuff[5] = String( (int) floor(abs(vel)*1000) % 10 )[0] ;
-    display.setCursor(0, 16) ;   
-    display.print(velBuff) ;
-    display.display() ;
-  }
-
+// Update Buttons
+void updateButtons(){
   //Check button states and set flags if they are pressed
   if (digitalRead(PIN_START) && !buttonStartToggle){
     buttonStartToggle = 1 ; 
@@ -170,7 +187,8 @@ void loop() {
   } else if (!digitalRead(PIN_START) && buttonStartToggle && (millis() - buttonDebounceWait >= buttonStartDebounce)){
     buttonStartToggle = 0 ;
   }
-  if (digitalRead(STOP) && !buttonStopToggle){
+
+  if (digitalRead(PIN_STOP) && !buttonStopToggle){
     buttonStopToggle = 1 ; 
     buttonStopFlag = 1 ;
     buttonStopDebounce = millis() ;
@@ -178,4 +196,43 @@ void loop() {
     buttonStopToggle = 0 ;
   }
 
+  if (digitalRead({PIN_SAMPLE) && !buttonSampleToggle){
+    buttonSampleToggle = 1 ; 
+    buttonSampleFlag = 1 ;
+    buttonSampleDebounce = millis() ;
+  } else if (!digitalRead(PIN_SAMPLE) && buttonSampleToggle && (millis() - buttonDebounceWait >= buttonSampleDebounce)){
+    buttonSampleToggle = 0 ;
+  }
+
+  if (digitalRead({PIN_TIME) && !buttonTimeToggle){
+    buttonTimeToggle = 1 ; 
+    buttonTimeFlag = 1 ;
+    buttonTimeDebounce = millis() ;
+  } else if (!digitalRead(PIN_SAMPLE) && buttonTimeToggle && (millis() - buttonDebounceWait >= buttonTimeDebounce)){
+    buttonTimeToggle = 0 ;
+  }
+}
+
+// Handle any functions of the buttons
+void updateOptions(){
+  // Do an action when any of the buttons are flagged
+  if (buttonStartFlag){
+    buttonStartFlag = 0 ;
+    //Do Stuff
+  } 
+
+  if (buttonStopFlag){
+    buttonStopFlag = 0 ;
+    //Do Stuff
+  } 
+
+  if (buttonSampleFlag){
+    buttonSampleFlag = 0 ;
+    //Do Stuff
+  }
+
+  if (buttonTimeFlag){
+    buttonTimeFlag = 0 ;
+    //Do Stuff
+  }
 }
