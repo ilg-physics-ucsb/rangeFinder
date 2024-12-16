@@ -9,16 +9,17 @@
 #include <stdint.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <Keyboard.h>
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
 #define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
-#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+#define SCREEN_ADDRESS 0x3C // See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
 
 #define PIN_START 18      // Green Button
 #define PIN_STOP 9        // Red Button
-#define PIN_UP 19         // Blue Button
-#define PIN_DOWN 7        // Yellow Button
+#define PIN_TIME 19       // Blue Button
+#define PIN_SAMPLE 7      // Yellow Button
 #define PIN_INTERRUPT 10  // Interrupt for the Range Finder
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
@@ -30,10 +31,33 @@ VL53L4CX_MultiRangingData_t *pRangeFinderData = &rangeFinderData;
 uint8_t dataFlag = 0 ;
 int dataStatus = 0 ;
 int objectNum = 0 ;
-float data = 0 ;
+int dataRaw = 0 ;
+int dataRawLast = 0 ;
+int dataTime = 200 ; // Time for the sensor to average the distance over (in milliseconds)
+float pos = 0 ;        // Smoothed data in m
+float vel = 0 ;        // Smoother data of velocity in m/s
 
 bool displayFlag = 0 ;
-char buff[7] ;
+char posBuff[5] ;
+char velBuff[6] ;
+
+unsigned long buttonDebounceWait   = 20 ;  // In millis
+unsigned long buttonStartDebounce  = 0 ;
+unsigned long buttonStopDebounce   = 0 ;
+unsigned long buttonSampleDebounce = 0 ;
+unsigned long buttonTimeDebounce   = 0 ;
+
+bool buttonStartToggle    = 0 ;
+bool buttonStopToggle     = 0 ;
+bool buttonSampleToggle   = 0 ;
+bool buttonTimeToggle     = 0 ;
+
+bool buttonStartFlag      = 0 ;
+bool buttonStopFlag       = 0 ;
+bool buttonSampleFlag     = 0 ;
+bool buttonTimeFlag       = 0 ;
+
+
 
 void interruptRangeFinder() {
   interruptFlag = 1;
@@ -42,13 +66,11 @@ void interruptRangeFinder() {
 
 // the setup function runs once when you press reset or power the board
 void setup() {
-  Serial.begin(115200) ;
-
   // initialize GPIO pins
   pinMode(PIN_START, INPUT_PULLUP) ;
   pinMode(PIN_STOP,  INPUT_PULLUP) ;
-  pinMode(PIN_UP,    INPUT_PULLUP) ;
-  pinMode(PIN_DOWN,  INPUT_PULLUP) ;
+  pinMode(PIN_TIME,    INPUT_PULLUP) ;
+  pinMode(PIN_SAMPLE,  INPUT_PULLUP) ;
   pinMode(PIN_LED,   OUTPUT) ;
   attachInterrupt(PIN_INTERRUPT, interruptRangeFinder, FALLING) ;
 
@@ -58,21 +80,22 @@ void setup() {
   rangeFinder.VL53L4CX_Off() ;
   rangeFinder.InitSensor(0x12) ;
   rangeFinder.VL53L4CX_SetDistanceMode(VL53L4CX_DISTANCEMODE_LONG) ;
-  rangeFinder.VL53L4CX_SetMeasurementTimingBudgetMicroSeconds(50000) ;
+  rangeFinder.VL53L4CX_SetMeasurementTimingBudgetMicroSeconds(dataTime*1000) ;
   rangeFinder.VL53L4CX_StartMeasurement() ;
 
 
   // Start up display
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println(F("SSD1306 allocation failed"));
-    for(;;); // Don't proceed, loop forever
-  }
+  display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS) ;
 
   display.clearDisplay() ;
   display.setTextSize(1) ;                             // Normal 1:1 pixel scale
   display.setTextColor(SSD1306_WHITE, SSD1306_BLACK) ; // Draw white text
+  display.setTextSize(2) ;
   display.setCursor(0, 0) ;                            // Start at top-left corner
   display.display() ;
+
+  //Initialize Keyboard
+  Keyboard.begin() ;
 }
 
 // the loop function runs over and over again forever
@@ -92,8 +115,12 @@ void loop() {
 
       // Iterate over every object found to get the 1 data point wanted 
       for (int j=0; j<objectNum; j++){
-        if (pRangeFinderData->RangeData[j].RangeStatus != 0){
-          data = pRangeFinderData->RangeData[j].RangeMilliMeter ; 
+        if (pRangeFinderData->RangeData[j].RangeStatus == 0){
+          dataRawLast = dataRaw ;
+          dataRaw = pRangeFinderData->RangeData[j].RangeMilliMeter ; 
+
+          pos = (float) dataRaw / 1000 ;
+          vel = (float) (dataRaw - dataRawLast) / dataTime ;
           break;
         }
       }
@@ -102,21 +129,53 @@ void loop() {
       if (dataStatus == 0) {
         dataStatus = rangeFinder.VL53L4CX_ClearInterruptAndStartMeasurement();
       }
-
-      displayFlag = 1 ;
       digitalWrite(PIN_LED, LOW) ;
+      displayFlag = 1 ;
     }
   }
+
 
   if (displayFlag){
     displayFlag = 0 ;
 
     // Format the number to show
-    sprintf(buff, "%06f", data) ;
-    Serial.println(data) ;
+    posBuff[0] = String( (int) floor(abs(pos)) % 10 )[0] ;
+    posBuff[1] = '.' ;
+    posBuff[2] = String( (int) floor(abs(pos)*10) % 10 )[0] ;
+    posBuff[3] = String( (int) floor(abs(pos)*100) % 10 )[0] ;
+    posBuff[4] = String( (int) floor(abs(pos)*1000) % 10 )[0] ;
+    display.setCursor(0, 0) ;   
+    display.print(posBuff) ;
 
-    display.setCursor(0, 0) ;                            // Start at top-left corner
-    display.print(buff) ;
+    if (vel<0){
+      velBuff[0] = '-' ;
+    } else {
+      velBuff[0] = '+' ;
+    }
+    velBuff[1] = String( (int) floor(abs(vel)) % 10 )[0] ;
+    velBuff[2] = '.' ;
+    velBuff[3] = String( (int) floor(abs(vel)*10) % 10 )[0] ;
+    velBuff[4] = String( (int) floor(abs(vel)*100) % 10 )[0] ;
+    velBuff[5] = String( (int) floor(abs(vel)*1000) % 10 )[0] ;
+    display.setCursor(0, 16) ;   
+    display.print(velBuff) ;
     display.display() ;
   }
+
+  //Check button states and set flags if they are pressed
+  if (digitalRead(PIN_START) && !buttonStartToggle){
+    buttonStartToggle = 1 ; 
+    buttonStartFlag = 1 ;
+    buttonStartDebounce = millis() ;
+  } else if (!digitalRead(PIN_START) && buttonStartToggle && (millis() - buttonDebounceWait >= buttonStartDebounce)){
+    buttonStartToggle = 0 ;
+  }
+  if (digitalRead(STOP) && !buttonStopToggle){
+    buttonStopToggle = 1 ; 
+    buttonStopFlag = 1 ;
+    buttonStopDebounce = millis() ;
+  } else if (!digitalRead(PIN_STOP) && buttonStopToggle && (millis() - buttonDebounceWait >= buttonStopDebounce)){
+    buttonStopToggle = 0 ;
+  }
+
 }
