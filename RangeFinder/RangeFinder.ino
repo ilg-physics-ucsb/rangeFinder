@@ -19,44 +19,69 @@
 #define PIN_START 18      // Green Button
 #define PIN_STOP 9        // Red Button
 #define PIN_TIME 19       // Blue Button
-#define PIN_SAMPLE 7      // Yellow Button
+#define PIN_RATE 7      // Yellow Button
 #define PIN_INTERRUPT 10  // Interrupt for the Range Finder
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 VL53L4CX rangeFinder(&Wire, 11);
 
-volatile bool interruptFlag = 0;
 VL53L4CX_MultiRangingData_t rangeFinderData;
 VL53L4CX_MultiRangingData_t *pRangeFinderData = &rangeFinderData;
 uint8_t dataFlag = 0 ;
 int dataStatus = 0 ;
 int objectNum = 0 ;
+unsigned long dataRawTime = 50 ; // Time for the sensor to average over 
 int dataRaw = 0 ;
-int dataRawLast = 0 ;
-int dataTime = 200 ; // Time for the sensor to average the distance over (in milliseconds)
-float pos = 0 ;        // Smoothed data in m
-float vel = 0 ;        // Smoother data of velocity in m/s
 
-bool displayFlag = 0 ;
+int dataRecordingIntervalIndex = 0 ;
+unsigned long dataRecordingInterval[] = {10000, 15000, 20000, 30000, 5000} ; //How long to record data in millis
+unsigned long dataRecordingTime = 0 ;
+char dataRecordingIntervalBuff[5] ;
+
+
+int dataFilterIntervalIndex = 0 ;
+unsigned long dataFilterInterval[] = {200, 500, 1000, 50, 100};              // Time for the us to filter the sensors data over
+unsigned long dataFilterTime = 0 ;    
+int dataFilterSamples = dataFilterInterval[dataFilterIntervalIndex]/dataRawTime ;
+char dataFilterIntervalBuff[5] ;                          
+
+float time = 0 ;   // Time of recorded data
+float pos = 0 ;    // Smoothed data in m
+float vel = 0 ;    // Smoothed data of velocity in m/s
 char posBuff[5] ;
 char velBuff[6] ;
+char timeBuff[6] ;
+
+bool dataNewFlag = 0 ;
+int dataArrayIndex = 0 ;
+float timeArray[600] ;
+float posArray[600] ;
+float velArray[600] ;
+
+int posPixelX = 0 ;
+int posPixelY = 0 ;
+
+unsigned long displayInterval = 200 ;
+unsigned long displayTime = 0 ;
 
 unsigned long buttonDebounceWait   = 20 ;  // In millis
 unsigned long buttonStartDebounce  = 0 ;
 unsigned long buttonStopDebounce   = 0 ;
-unsigned long buttonSampleDebounce = 0 ;
+unsigned long buttonRateDebounce   = 0 ;
 unsigned long buttonTimeDebounce   = 0 ;
-
 bool buttonStartToggle    = 0 ;
 bool buttonStopToggle     = 0 ;
-bool buttonSampleToggle   = 0 ;
+bool buttonRateToggle     = 0 ;
 bool buttonTimeToggle     = 0 ;
-
 bool buttonStartFlag      = 0 ;
 bool buttonStopFlag       = 0 ;
-bool buttonSampleFlag     = 0 ;
+bool buttonRateFlag       = 0 ;
 bool buttonTimeFlag       = 0 ;
 
+int state = 0 ;
+bool displayFlag = 0 ;
+volatile bool interruptFlag = 0;
+unsigned long t0 = 0 ;
 
 
 void interruptRangeFinder() {
@@ -70,7 +95,7 @@ void setup() {
   pinMode(PIN_START, INPUT_PULLUP) ;
   pinMode(PIN_STOP,  INPUT_PULLUP) ;
   pinMode(PIN_TIME,    INPUT_PULLUP) ;
-  pinMode(PIN_SAMPLE,  INPUT_PULLUP) ;
+  pinMode(PIN_RATE,  INPUT_PULLUP) ;
   pinMode(PIN_LED,   OUTPUT) ;
   attachInterrupt(PIN_INTERRUPT, interruptRangeFinder, FALLING) ;
 
@@ -80,65 +105,150 @@ void setup() {
   rangeFinder.VL53L4CX_Off() ;
   rangeFinder.InitSensor(0x12) ;
   rangeFinder.VL53L4CX_SetDistanceMode(VL53L4CX_DISTANCEMODE_LONG) ;
-  rangeFinder.VL53L4CX_SetMeasurementTimingBudgetMicroSeconds(dataTime*1000) ;
+  rangeFinder.VL53L4CX_SetMeasurementTimingBudgetMicroSeconds(dataRawTime*1000) ; // Needs to be in milliseconds
   rangeFinder.VL53L4CX_StartMeasurement() ;
 
 
   // Start up display
   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS) ;
-
-  display.clearDisplay() ;
   display.setTextSize(1) ;                             // Normal 1:1 pixel scale
   display.setTextColor(SSD1306_WHITE, SSD1306_BLACK) ; // Draw white text
-  display.setTextSize(2) ;
-  display.setCursor(0, 0) ;                            // Start at top-left corner
-  display.display() ;
+  initDisplay(state) ;
 
   //Initialize Keyboard
   Keyboard.begin() ;
 }
 
-// the loop function runs over and over again forever
 void loop() {
-  updateRangeFinder() ;
+  // Update interactives
   updateButtons() ;
-  updateOptions() ;
+  updateRangeFinder() ;
+
+  // Main state machine for handling data
+  switch(state) {
+    case 0:
+      // Idle mode: Display distance and react to buttons
+
+      // Update position so you know the sensor is working
+      if (millis() - displayTime >= displayInterval){
+        displayTime = millis() ;
+        display.setTextSize(2) ;
+        display.setCursor(22, 0) ;
+        formatPos(pos) ;
+        display.print(posBuff) ;
+        display.print("m") ;
+        display.setTextSize(1) ;
+        displayFlag = 1 ;
+
+      } 
+
+      // Start recording data is green button pressed
+      if (buttonStartFlag){
+        state = 1 ;
+        initDisplay(state) ;
+        dataRecordingTime = millis() ;
+      }
+
+      // Adjust the length of data collection
+      if (buttonTimeFlag){
+        buttonTimeFlag = 0 ;
+        dataRecordingIntervalIndex = (dataRecordingIntervalIndex+1)%5 ;
+        formatRecordingInterval() ;
+        display.setCursor(94, 24) ;
+        display.print(dataRecordingIntervalBuff) ;
+        displayFlag = 1 ;
+      }
+
+      // Adjusts the rate at which data is taken
+      if (buttonRateFlag){
+        buttonRateFlag = 0 ;
+        dataFilterIntervalIndex = (dataFilterIntervalIndex+1)%5 ;
+        formatFilterInterval() ;
+        display.setCursor(30, 24) ;
+        display.print(dataFilterIntervalBuff) ;
+        dataFilterSamples = dataFilterInterval[dataFilterIntervalIndex]/dataRawTime ;
+        displayFlag = 1 ;
+      }
+
+      // Need to handle buttons even if not used
+      if (buttonStopFlag){
+        buttonStopFlag = 0 ;
+      }
+    break;
+    case 1:
+      // Recording mode: Display graph of distance and only react to red button
+
+      if (dataNewFlag){
+        // If new data available record it
+        // Records all data, can be parsed for sparser data when recorded
+        timeArray[dataArrayIndex] = time ;
+        posArray[dataArrayIndex] = pos ;
+        velArray[dataArrayIndex] = vel ;
+        dataArrayIndex ++ ;
+
+        posPixelX = 128*time*1000/dataRecordingInterval[dataRecordingIntervalIndex] ;  // Divided by max time on graph
+        posPixelY = 31 - 32*pos/2 ;                                               // Divided by max position showable
+
+        display.drawPixel(posPixelX, posPixelY, SSD1306_WHITE) ;
+        displayFlag = 1 ;
+
+      }
+
+
+      // End data recording and write is all to the keyboard if its time
+      if (millis() - dataRecordingTime >= dataRecordingInterval[dataRecordingIntervalIndex]){
+        state = 2 ;
+        initDisplay(state) ;
+      }
+
+      // Also end recording if red button pressed
+      if (buttonStopFlag){
+        buttonStopFlag = 0 ;
+        state = 2 ;
+        initDisplay(state) ;
+      }
+
+      // Need to handle buttons even if not used
+      if (buttonStartFlag){
+        buttonStartFlag = 0 ;
+      }
+      if (buttonRateFlag){
+        buttonRateFlag = 0 ;
+      }
+      if (buttonTimeFlag){
+        buttonTimeFlag = 0 ;
+      }
+    break;
+    case 2:
+      // Wire mode: Triggered on end of recording mode, blocking function to write data to keyboard
+
+      for (int i=0; i<dataArrayIndex; i+=dataFilterSamples){
+        formatTime(timeArray[i]) ;
+        formatPos(posArray[i]) ;
+        formatVel(velArray[i]) ;
+
+        Keyboard.print(timeBuff) ;
+        Keyboard.write('\t') ;
+        Keyboard.print(posBuff) ;
+        Keyboard.write('\t') ;
+        Keyboard.println(velBuff) ;
+
+      }
+
+      state = 0 ;
+      dataArrayIndex = 0 ;
+      initDisplay(state) ;
+    break;
+  }
+
+  // Write to the display when necessary 
   updateDisplay() ;
 }
+
+
 //---------------------------------------------------------------------------------------------------------------------
-// Functions 
+// Update Functions 
 //---------------------------------------------------------------------------------------------------------------------
-
-// Update the display
-void updateDisplay(){
-  // Only write to display when new text
-  if (displayFlag){
-    displayFlag = 0 ;
-
-    // Format the number to show
-    posBuff[0] = String( (int) floor(abs(pos)) % 10 )[0] ;
-    posBuff[1] = '.' ;
-    posBuff[2] = String( (int) floor(abs(pos)*10) % 10 )[0] ;
-    posBuff[3] = String( (int) floor(abs(pos)*100) % 10 )[0] ;
-    posBuff[4] = String( (int) floor(abs(pos)*1000) % 10 )[0] ;
-    display.setCursor(0, 0) ;   
-    display.print(posBuff) ;
-
-    if (vel<0){
-      velBuff[0] = '-' ;
-    } else {
-      velBuff[0] = '+' ;
-    }
-    velBuff[1] = String( (int) floor(abs(vel)) % 10 )[0] ;
-    velBuff[2] = '.' ;
-    velBuff[3] = String( (int) floor(abs(vel)*10) % 10 )[0] ;
-    velBuff[4] = String( (int) floor(abs(vel)*100) % 10 )[0] ;
-    velBuff[5] = String( (int) floor(abs(vel)*1000) % 10 )[0] ;
-    display.setCursor(0, 16) ;   
-    display.print(velBuff) ;
-    display.display() ;
-  }
-}
 
 // Update the distanced detected 
 void updateRangeFinder(){
@@ -158,11 +268,7 @@ void updateRangeFinder(){
       // Iterate over every object found to get the 1 data point wanted 
       for (int j=0; j<objectNum; j++){
         if (pRangeFinderData->RangeData[j].RangeStatus == 0){
-          dataRawLast = dataRaw ;
           dataRaw = pRangeFinderData->RangeData[j].RangeMilliMeter ; 
-
-          pos = (float) dataRaw / 1000 ;
-          vel = (float) (dataRaw - dataRawLast) / dataTime ;
           break;
         }
       }
@@ -172,7 +278,10 @@ void updateRangeFinder(){
         dataStatus = rangeFinder.VL53L4CX_ClearInterruptAndStartMeasurement();
       }
       digitalWrite(PIN_LED, LOW) ;
-      displayFlag = 1 ;
+
+      // Calculate Filtered Position and velocity
+      computeCoordinates(dataRaw) ;
+      dataNewFlag = 1 ;
     }
   }
 }
@@ -180,59 +289,167 @@ void updateRangeFinder(){
 // Update Buttons
 void updateButtons(){
   //Check button states and set flags if they are pressed
-  if (digitalRead(PIN_START) && !buttonStartToggle){
+  if (!digitalRead(PIN_START) && !buttonStartToggle){
     buttonStartToggle = 1 ; 
     buttonStartFlag = 1 ;
     buttonStartDebounce = millis() ;
-  } else if (!digitalRead(PIN_START) && buttonStartToggle && (millis() - buttonDebounceWait >= buttonStartDebounce)){
+  } else if (digitalRead(PIN_START) && buttonStartToggle && (millis() - buttonStartDebounce >= buttonDebounceWait)){
     buttonStartToggle = 0 ;
   }
 
-  if (digitalRead(PIN_STOP) && !buttonStopToggle){
+  if (!digitalRead(PIN_STOP) && !buttonStopToggle){
     buttonStopToggle = 1 ; 
     buttonStopFlag = 1 ;
     buttonStopDebounce = millis() ;
-  } else if (!digitalRead(PIN_STOP) && buttonStopToggle && (millis() - buttonDebounceWait >= buttonStopDebounce)){
+  } else if (digitalRead(PIN_STOP) && buttonStopToggle && (millis() - buttonStopDebounce >= buttonDebounceWait)){
     buttonStopToggle = 0 ;
   }
 
-  if (digitalRead({PIN_SAMPLE) && !buttonSampleToggle){
-    buttonSampleToggle = 1 ; 
-    buttonSampleFlag = 1 ;
-    buttonSampleDebounce = millis() ;
-  } else if (!digitalRead(PIN_SAMPLE) && buttonSampleToggle && (millis() - buttonDebounceWait >= buttonSampleDebounce)){
-    buttonSampleToggle = 0 ;
+  if (!digitalRead(PIN_RATE) && !buttonRateToggle){
+    buttonRateToggle = 1 ; 
+    buttonRateFlag = 1 ;
+    buttonRateDebounce = millis() ;
+  } else if (digitalRead(PIN_RATE) && buttonRateToggle && (millis() - buttonRateDebounce >= buttonDebounceWait)){
+    buttonRateToggle = 0 ;
   }
 
-  if (digitalRead({PIN_TIME) && !buttonTimeToggle){
+  if (!digitalRead(PIN_TIME) && !buttonTimeToggle){
     buttonTimeToggle = 1 ; 
     buttonTimeFlag = 1 ;
     buttonTimeDebounce = millis() ;
-  } else if (!digitalRead(PIN_SAMPLE) && buttonTimeToggle && (millis() - buttonDebounceWait >= buttonTimeDebounce)){
+  } else if (digitalRead(PIN_TIME) && buttonTimeToggle && (millis() - buttonTimeDebounce >= buttonDebounceWait)){
     buttonTimeToggle = 0 ;
   }
 }
 
-// Handle any functions of the buttons
-void updateOptions(){
-  // Do an action when any of the buttons are flagged
-  if (buttonStartFlag){
-    buttonStartFlag = 0 ;
-    //Do Stuff
-  } 
-
-  if (buttonStopFlag){
-    buttonStopFlag = 0 ;
-    //Do Stuff
-  } 
-
-  if (buttonSampleFlag){
-    buttonSampleFlag = 0 ;
-    //Do Stuff
+// Update the display
+void updateDisplay(){
+  // Only write to display when new text
+  if (displayFlag){
+    displayFlag = 0 ;
+    display.display() ;
   }
+}
 
-  if (buttonTimeFlag){
-    buttonTimeFlag = 0 ;
-    //Do Stuff
+//---------------------------------------------------------------------------------------------------------------------
+// Utility Functions 
+//---------------------------------------------------------------------------------------------------------------------
+
+// Positive definite modulus
+int mod(int x, int y){
+  int val = x%y ;
+  if (val < 0){
+    val += y ;
   }
+  return val ;
+}
+
+void initDisplay(int _state){
+  // Clear the initialize a new screen
+  // Used to switch cases or start up
+
+  display.clearDisplay() ;
+  switch(_state){
+    case 0:
+      // Display Distance
+      display.setTextSize(2) ;
+      display.setCursor(22, 0) ;
+      formatPos(pos) ;
+      display.print(posBuff) ;
+      display.print("m") ;
+      display.setTextSize(1) ;
+
+      // Display options
+      display.setCursor(0, 24) ;
+      display.print("Rate:") ;
+      formatFilterInterval() ;
+      display.print(dataFilterIntervalBuff) ;
+
+      display.setCursor(64, 24) ;
+      display.print("Time:") ;
+      formatRecordingInterval() ;
+      display.print(dataRecordingIntervalBuff) ;
+    break;
+    case 1:
+      // Setup the graph for displaying
+      display.drawFastVLine(0, 0, 32, SSD1306_WHITE) ;
+      display.drawFastHLine(0, 31, 128, SSD1306_WHITE) ;
+    break;
+    case 2:
+      // Write Uploading for the blocking function 
+      display.setTextSize(2) ;
+      display.setCursor(10, 12) ;
+      display.print("Uploading") ;
+      display.setTextSize(1) ;
+    break;
+  }
+  
+  displayFlag = 1 ;
+}
+
+void computeCoordinates(int val){
+  // Computes the position and velocity after every measurement
+  // Eventually should use filtering (Kalman filter)
+  time = (float) (millis() - dataRecordingTime)/1000 ;
+  pos = (float) dataRaw/1000 ;
+  vel = 0 ;
+  return ;
+}
+
+// Format the position as a string
+void formatPos(float _position){
+  posBuff[0] = String( (int) floor(abs(_position)) % 10 )[0] ;
+  posBuff[1] = '.' ;
+  posBuff[2] = String( (int) floor(abs(_position)*10) % 10 )[0] ;
+  posBuff[3] = String( (int) floor(abs(_position)*100) % 10 )[0] ;
+  posBuff[4] = String( (int) floor(abs(_position)*1000) % 10 )[0] ;
+  return ;
+}
+
+// Format the velocity as a string
+void formatVel(float _velocity){
+  // Format the velocity number to show
+  if (_velocity<0){
+    velBuff[0] = '-' ;
+  } else {
+    velBuff[0] = '+' ;
+  }
+  velBuff[1] = String( (int) floor(abs(_velocity)) % 10 )[0] ;
+  velBuff[2] = '.' ;
+  velBuff[3] = String( (int) floor(abs(_velocity)*10) % 10 )[0] ;
+  velBuff[4] = String( (int) floor(abs(_velocity)*100) % 10 )[0] ;
+  velBuff[5] = String( (int) floor(abs(_velocity)*1000) % 10 )[0] ;
+  return ;
+}
+
+// Format the time as a string
+void formatTime(float _time){
+  timeBuff[0] = String( (int) floor(_time/10) % 10 )[0] ;
+  timeBuff[1] = String( (int) floor(_time) % 10 )[0] ;
+  timeBuff[2] = '.' ;
+  timeBuff[3] = String( (int) floor(_time*10) % 10 )[0] ;
+  timeBuff[4] = String( (int) floor(_time*100) % 10 )[0] ;
+  timeBuff[5] = String( (int) floor(_time*1000) % 10 )[0] ;
+  return ;
+}
+
+// Format the options for printing
+void formatFilterInterval(){
+  float rate = (float) dataFilterInterval[dataFilterIntervalIndex] / 1000 ;
+  dataFilterIntervalBuff[0] = String( (int) floor(rate) % 10 )[0] ;
+  dataFilterIntervalBuff[1] = '.' ;
+  dataFilterIntervalBuff[2] = String( (int) floor(rate*10) % 10 )[0] ;
+  dataFilterIntervalBuff[3] = String( (int) floor(rate*100) % 10 )[0] ;
+  dataFilterIntervalBuff[4] = 's' ;
+  return ;
+}
+
+void formatRecordingInterval(){
+  int time = dataRecordingInterval[dataRecordingIntervalIndex]/1000 ;
+  dataRecordingIntervalBuff[0] = String(time / 10 )[0] ;
+  dataRecordingIntervalBuff[1] = String(time % 10 )[0] ;
+  dataRecordingIntervalBuff[2] = '.' ;
+  dataRecordingIntervalBuff[3] = '0' ;
+  dataRecordingIntervalBuff[4] = 's' ;
+  return ;
 }
