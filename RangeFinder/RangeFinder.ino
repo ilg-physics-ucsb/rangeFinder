@@ -16,14 +16,14 @@
 #define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
 #define SCREEN_ADDRESS 0x3C // See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
 
-#define PIN_START 18      // Green Button
-#define PIN_STOP 9        // Red Button
-#define PIN_TIME 19       // Blue Button
-#define PIN_RATE 7      // Yellow Button
-#define PIN_INTERRUPT 10  // Interrupt for the Range Finder
+#define PIN_START 10      // Green Button
+#define PIN_STOP 13       // Red Button
+#define PIN_TIME 11       // Blue Button
+#define PIN_RATE 12       // Yellow Button
+#define PIN_INTERRUPT 7   // Interrupt for the Range Finder
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-VL53L4CX rangeFinder(&Wire, 11);
+VL53L4CX rangeFinder(&Wire, 9);
 
 VL53L4CX_MultiRangingData_t rangeFinderData;
 VL53L4CX_MultiRangingData_t *pRangeFinderData = &rangeFinderData;
@@ -45,18 +45,23 @@ unsigned long dataFilterTime = 0 ;
 int dataFilterSamples = dataFilterInterval[dataFilterIntervalIndex]/dataRawTime ;
 char dataFilterIntervalBuff[5] ;                          
 
-float time = 0 ;   // Time of recorded data
-float pos = 0 ;    // Smoothed data in m
-float vel = 0 ;    // Smoothed data of velocity in m/s
+float time = 0 ;            // Time of recorded data
+unsigned long timeAbs = 0 ; // counter to get absolute time difference
+float pos = 0 ;             // Smoothed data in m
+float posLast = 0 ;         // Last position for velocity calculation
+float vel = 0 ;             // Smoothed data of velocity in m/s
+float alpha = 0.95 ;        // Factor for data smoothing 
+float alphaInv = 1-alpha ;  // Precalculating 
 char posBuff[5] ;
-char velBuff[6] ;
+char velBuff[8] ;
 char timeBuff[6] ;
 
 bool dataNewFlag = 0 ;
 int dataArrayIndex = 0 ;
-float timeArray[600] ;
-float posArray[600] ;
-float velArray[600] ;
+float timeArray[1000] ;
+float posArray[1000] ;
+float velArray[1000] ;
+int keyboardDelay = 40 ;
 
 int posPixelX = 0 ;
 int posPixelY = 0 ;
@@ -79,6 +84,7 @@ bool buttonRateFlag       = 0 ;
 bool buttonTimeFlag       = 0 ;
 
 int state = 0 ;
+int stateLast = 0 ;
 bool displayFlag = 0 ;
 volatile bool interruptFlag = 0;
 unsigned long t0 = 0 ;
@@ -111,6 +117,7 @@ void setup() {
 
   // Start up display
   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS) ;
+  display.setRotation(2) ;
   display.setTextSize(1) ;                             // Normal 1:1 pixel scale
   display.setTextColor(SSD1306_WHITE, SSD1306_BLACK) ; // Draw white text
   initDisplay(state) ;
@@ -125,6 +132,7 @@ void loop() {
   updateRangeFinder() ;
 
   // Main state machine for handling data
+  stateLast = state ;
   switch(state) {
     case 0:
       // Idle mode: Display distance and react to buttons
@@ -174,11 +182,17 @@ void loop() {
       if (buttonStopFlag){
         buttonStopFlag = 0 ;
       }
+
+      // Need to handle data New flag even if not used
+      if (dataNewFlag){
+        dataNewFlag = 0 ;
+      }
     break;
     case 1:
       // Recording mode: Display graph of distance and only react to red button
 
       if (dataNewFlag){
+        dataNewFlag = 0 ;
         // If new data available record it
         // Records all data, can be parsed for sparser data when recorded
         timeArray[dataArrayIndex] = time ;
@@ -220,20 +234,28 @@ void loop() {
       }
     break;
     case 2:
-      // Wire mode: Triggered on end of recording mode, blocking function to write data to keyboard
+      // Write mode: Triggered on end of recording mode, blocking function to write data to keyboard
+      // Blocking function so no need to handle flags 
 
       for (int i=0; i<dataArrayIndex; i+=dataFilterSamples){
-        formatTime(timeArray[i]) ;
-        formatPos(posArray[i]) ;
-        formatVel(velArray[i]) ;
-
-        Keyboard.print(timeBuff) ;
-        Keyboard.write('\t') ;
-        Keyboard.print(posBuff) ;
-        Keyboard.write('\t') ;
-        Keyboard.println(velBuff) ;
+        Keyboard.print(timeArray[i], 3) ;
+        delay(keyboardDelay) ;
+        Keyboard.press('\t') ;
+        delay(keyboardDelay) ;
+        Keyboard.release('\t') ;
+        Keyboard.print(posArray[i], 3) ;
+        delay(keyboardDelay) ;
+        Keyboard.press('\t') ;
+        delay(keyboardDelay) ;
+        Keyboard.release('\t') ;
+        Keyboard.print(velArray[i], 7) ;
+        delay(keyboardDelay) ;
+        Keyboard.press('\n') ;
+        delay(keyboardDelay) ;
+        Keyboard.release('\n') ;
 
       }
+
 
       state = 0 ;
       dataArrayIndex = 0 ;
@@ -278,11 +300,12 @@ void updateRangeFinder(){
         dataStatus = rangeFinder.VL53L4CX_ClearInterruptAndStartMeasurement();
       }
       digitalWrite(PIN_LED, LOW) ;
-
-      // Calculate Filtered Position and velocity
-      computeCoordinates(dataRaw) ;
-      dataNewFlag = 1 ;
     }
+
+
+    // Calculate Filtered Position and velocity
+    computeCoordinates(dataRaw) ;
+    dataNewFlag = 1 ;
   }
 }
 
@@ -392,7 +415,11 @@ void computeCoordinates(int val){
   // Eventually should use filtering (Kalman filter)
   time = (float) (millis() - dataRecordingTime)/1000 ;
   pos = (float) dataRaw/1000 ;
-  vel = 0 ;
+  vel = (float) 1000*(pos - posLast)/(millis() - timeAbs) ;
+
+  // Set last values for comparing to next time
+  timeAbs = millis() ;
+  posLast = pos ;
   return ;
 }
 
@@ -419,6 +446,8 @@ void formatVel(float _velocity){
   velBuff[3] = String( (int) floor(abs(_velocity)*10) % 10 )[0] ;
   velBuff[4] = String( (int) floor(abs(_velocity)*100) % 10 )[0] ;
   velBuff[5] = String( (int) floor(abs(_velocity)*1000) % 10 )[0] ;
+  velBuff[6] = String( (int) floor(abs(_velocity)*10000) % 10 )[0] ;
+  velBuff[7] = String( (int) floor(abs(_velocity)*100000) % 10 )[0] ;
   return ;
 }
 
