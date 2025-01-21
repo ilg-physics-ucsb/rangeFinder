@@ -2,7 +2,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <vl53l1_class.h>
+#include <vl53l1x_class.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -21,19 +21,19 @@
 #define PIN_TIME 11       // Blue Button
 #define PIN_RATE 12       // Yellow Button
 #define PIN_INTERRUPT 7   // Interrupt for the Range Finder
+#define PIN_SHUTDOWN 9    // Shutdown pin for the Range Finder
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-VL53L1 rangeFinder(&Wire, 9);
+VL53L1X rangeFinder(&Wire, PIN_SHUTDOWN);
 
-VL53L4CX_MultiRangingData_t rangeFinderData;
-VL53L4CX_MultiRangingData_t *pRangeFinderData = &rangeFinderData;
 uint8_t dataFlag = 0 ;
 int dataStatus = 0 ;
 int objectNum = 0 ;
 unsigned long dataRawTime = 50 ; // Time for the sensor to average over 
-float dataRaw = 0 ;
-float dataRawLast = 0 ;
-float dataRawLastLast = 0 ;
+uint16_t dataRaw = 0 ;
+float data = 0 ;
+float dataLast = 0 ;
+float dataLastLast = 0 ;
 
 int dataRecordingIntervalIndex = 0 ;
 unsigned long dataRecordingInterval[] = {10000, 15000, 20000, 30000, 5000} ; //How long to record data in millis
@@ -109,13 +109,16 @@ void setup() {
   pinMode(PIN_TIME,    INPUT_PULLUP) ;
   pinMode(PIN_RATE,  INPUT_PULLUP) ;
   pinMode(PIN_LED,   OUTPUT) ;
-  attachInterrupt(PIN_INTERRUPT, interruptRangeFinder, FALLING) ;
+  attachInterrupt(PIN_INTERRUPT, interruptRangeFinder, RISING) ;
 
   // Start up the rangefinder in interrupt mode
-  Wire.begin() ;
-  rangeFinder.begin() ;
-  rangeFinder.VL53L1_Off();
-  rangeFinder.InitSensor(0x12);
+  Wire.begin();
+  rangeFinder.begin();
+  rangeFinder.VL53L1X_Off();
+  rangeFinder.InitSensor(0x29) ;
+  rangeFinder.VL53L1X_SetROI(4, 4) ;
+  rangeFinder.VL53L1X_SetTimingBudgetInMs(dataRawTime) ;
+  rangeFinder.VL53L1X_StartRanging() ;
 
   // Start up display
   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS) ;
@@ -280,18 +283,18 @@ void updateRangeFinder(){
   if (interruptFlag){
     interruptFlag = 0 ;
     digitalWrite(PIN_LED, HIGH) ;
-    dataRaw = rangeFinder.distance() ;
+
+    //Read in the data
+    rangeFinder.VL53L1X_GetDistance(&dataRaw) ;
+    data = (float) dataRaw ;
     dataRecordingTime = millis() ;
 
-    if (dataRaw == -1){
-      dataRaw = dataRawLast ;
-    }
-
-    rangeFinder.clearInterrupt() ;
+    //Clear Interrupt for next data
+    rangeFinder.VL53L1X_ClearInterrupt() ;
     digitalWrite(PIN_LED, LOW) ;
 
     // Calculate Filtered Position and velocity
-    computeCoordinates(dataRaw) ;
+    computeCoordinates(data) ;
     dataNewFlag = 1 ;
   }
 }
@@ -401,12 +404,12 @@ void computeCoordinates(int val){
   // Computes the position and velocity after every measurement
   // Eventually should use filtering (Kalman filter)
   time = (float) (dataRecordingTime - dataRecordingTimeStart)/1000 ;
-  pos = (float) alpha*( (dataRaw + dataRawLast)/2000 ) + alphaInv*posLast ;
-  vel = (float) alpha*( (dataRaw - dataRawLastLast)/(time - timeLastLast)/1000 ) + alphaInv*velLast ;
+  pos = (float) alpha*( (data + dataLast)/2000 ) + alphaInv*posLast ;
+  vel = (float) alpha*( (data - dataLastLast)/(time - timeLastLast)/1000 ) + alphaInv*velLast ;
 
   // Set last values for comparing to next time
-  dataRawLastLast = dataRawLast ;
-  dataRawLast = dataRaw ; 
+  dataLastLast = dataLast ;
+  dataLast = data ; 
   timeLastLast = timeLast ;
   timeLast = time ;
   posLast = pos ;
