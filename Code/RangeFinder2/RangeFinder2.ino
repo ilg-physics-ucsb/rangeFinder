@@ -16,6 +16,7 @@
 #define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
 #define SCREEN_ADDRESS 0x3C // See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
 
+#define PIN_INDICATOR 2   // Light up LED
 #define PIN_START 10      // Green Button
 #define PIN_STOP 13       // Red Button
 #define PIN_TIME 11       // Blue Button
@@ -40,13 +41,16 @@ unsigned long dataRecordingInterval[] = {10000, 15000, 20000, 30000, 5000} ; //H
 unsigned long dataRecordingTime = 0 ;
 unsigned long dataRecordingTimeStart = 0 ;
 char dataRecordingIntervalBuff[5] ;
+int dataRecordingIntervalPos[2][2] = { {94, 24}, {30, 0} } ;
 
 
 int dataFilterIntervalIndex = 0 ;
 unsigned long dataFilterInterval[] = {200, 500, 1000, 50, 100};              // Time for the us to filter the sensors data over
 unsigned long dataFilterTime = 0 ;    
 int dataFilterSamples = dataFilterInterval[dataFilterIntervalIndex]/dataRawTime ;
-char dataFilterIntervalBuff[5] ;                          
+char dataFilterIntervalBuff[5] ;   
+int dataFilterIntervalPos[2][2] = { {30, 24}, {94, 0} } ;
+
 
 float time = 0 ;         // Time of recorded data
 float timeLast = 0 ;     // Last time for velocity
@@ -59,18 +63,24 @@ float velLast = 0 ;         // Last velocity for filtering
 float alpha = 0.5 ;        // Factor for data smoothing 
 float alphaInv = 1-alpha ;  // Precalculating 
 char posBuff[5] ;
-char velBuff[8] ;
+char velBuff[6] ;
 char timeBuff[6] ;
 
 bool dataNewFlag = 0 ;
 int dataArrayIndex = 0 ;
+int dataArrayCounter = 0 ;
+int dataArrayCounterSub = 0 ;
 float timeArray[1000] ;
 float posArray[1000] ;
 float velArray[1000] ;
-int keyboardDelay = 40 ;
+unsigned long keyboardDelay = 40 ;
+unsigned long keyboardTimer = 0 ;
+
 
 int posPixelX = 0 ;
 int posPixelY = 0 ;
+int displayRotation = 0 ;
+int dataDistancePos[2][2] = { {22, 0}, {22, 16} } ;
 
 unsigned long displayInterval = 200 ;
 unsigned long displayTime = 0 ;
@@ -106,9 +116,9 @@ void setup() {
   // initialize GPIO pins
   pinMode(PIN_START, INPUT_PULLUP) ;
   pinMode(PIN_STOP,  INPUT_PULLUP) ;
-  pinMode(PIN_TIME,    INPUT_PULLUP) ;
+  pinMode(PIN_TIME,  INPUT_PULLUP) ;
   pinMode(PIN_RATE,  INPUT_PULLUP) ;
-  pinMode(PIN_LED,   OUTPUT) ;
+  pinMode(PIN_INDICATOR,   OUTPUT) ;
   attachInterrupt(PIN_INTERRUPT, interruptRangeFinder, RISING) ;
 
   // Start up the rangefinder in interrupt mode
@@ -122,9 +132,13 @@ void setup() {
 
   // Start up display
   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS) ;
-  display.setRotation(2) ;
   display.setTextSize(1) ;                             // Normal 1:1 pixel scale
   display.setTextColor(SSD1306_WHITE, SSD1306_BLACK) ; // Draw white text
+  if (displayRotation == 0){
+    display.setRotation(0) ;
+  } else {
+    display.setRotation(2) ;
+  }
   initDisplay(state) ;
 
   //Initialize Keyboard
@@ -146,7 +160,7 @@ void loop() {
       if (millis() - displayTime >= displayInterval){
         displayTime = millis() ;
         display.setTextSize(2) ;
-        display.setCursor(22, 0) ;
+        display.setCursor(dataDistancePos[displayRotation][0], dataDistancePos[displayRotation][1]) ;
         formatPos(pos) ;
         display.print(posBuff) ;
         display.print("m") ;
@@ -167,7 +181,7 @@ void loop() {
         buttonTimeFlag = 0 ;
         dataRecordingIntervalIndex = (dataRecordingIntervalIndex+1)%5 ;
         formatRecordingInterval() ;
-        display.setCursor(94, 24) ;
+        display.setCursor(dataRecordingIntervalPos[displayRotation][0], dataRecordingIntervalPos[displayRotation][1]) ;
         display.print(dataRecordingIntervalBuff) ;
         displayFlag = 1 ;
       }
@@ -177,15 +191,22 @@ void loop() {
         buttonRateFlag = 0 ;
         dataFilterIntervalIndex = (dataFilterIntervalIndex+1)%5 ;
         formatFilterInterval() ;
-        display.setCursor(30, 24) ;
+        display.setCursor(dataFilterIntervalPos[displayRotation][0], dataFilterIntervalPos[displayRotation][1]) ;
         display.print(dataFilterIntervalBuff) ;
         dataFilterSamples = dataFilterInterval[dataFilterIntervalIndex]/dataRawTime ;
         displayFlag = 1 ;
       }
 
-      // Need to handle buttons even if not used
+      // Rotate the display if needed
       if (buttonStopFlag){
         buttonStopFlag = 0 ;
+        displayRotation = (displayRotation+1) % 2 ;
+        if (displayRotation == 0){
+          display.setRotation(0) ;
+        } else {
+          display.setRotation(2) ;
+        }
+        initDisplay(state) ;
       }
 
       // Need to handle data New flag even if not used
@@ -223,7 +244,7 @@ void loop() {
       // Also end recording if red button pressed
       if (buttonStopFlag){
         buttonStopFlag = 0 ;
-        state = 2 ;
+        state = 0 ;
         initDisplay(state) ;
       }
 
@@ -239,32 +260,90 @@ void loop() {
       }
     break;
     case 2:
-      // Write mode: Triggered on end of recording mode, blocking function to write data to keyboard
-      // Blocking function so no need to handle flags 
+      // Write mode: Triggered on end of recording mode, to write data to keyboard
 
-      for (int i=0; i<dataArrayIndex; i+=dataFilterSamples){
-        Keyboard.print(timeArray[i], 4) ;
-        delay(keyboardDelay) ;
-        Keyboard.press('\t') ;
-        delay(keyboardDelay) ;
-        Keyboard.release('\t') ;
-        Keyboard.print(posArray[i], 4) ;
-        delay(keyboardDelay) ;
-        Keyboard.press('\t') ;
-        delay(keyboardDelay) ;
-        Keyboard.release('\t') ;
-        Keyboard.print(velArray[i], 4) ;
-        delay(keyboardDelay) ;
-        Keyboard.press('\n') ;
-        delay(keyboardDelay) ;
-        Keyboard.release('\n') ;
+
+      // Only write to the keyboard after a specified keyboard delay each loop
+      if (millis() - keyboardTimer >= keyboardDelay){
+        keyboardTimer = 0 ;
+
+        // each data entry takes multiple delays, so cycle through with switch case
+        switch(dataArrayCounterSub){
+          case 0:
+            Keyboard.release('\n') ;
+            Keyboard.print(timeArray[dataArrayCounter], 4) ;
+          break;
+          case 1:
+            Keyboard.press('\t') ;
+          break;
+          case 2:
+            Keyboard.release('\t') ;
+            Keyboard.print(posArray[dataArrayCounter], 4) ;
+          break;
+          case 3:
+            Keyboard.press('\t') ;
+          break;
+          case 4:
+            Keyboard.release('\t') ;
+            Keyboard.print(velArray[dataArrayCounter], 4) ;
+          break;
+          case 5:
+            Keyboard.press('\n') ;
+          break;
+        }
+
+        // Increment the Subcounter and if overflows, increment which data to write
+        dataArrayCounterSub ++ ;
+        if (dataArrayCounterSub >= 8){
+          dataArrayCounterSub = 0 ;
+          dataArrayCounter += dataFilterSamples ;
+        }
 
       }
 
+      // Stop writing data to computer when you reach the end of the array
+      if (dataArrayCounter >= dataArrayIndex){
+        state = 0 ;
+        initDisplay(state) ;
+        // Reset Counters
+        dataArrayIndex = 0 ;
+        dataArrayCounter = 0 ;
+        dataArrayCounterSub = 0 ;
+        // Make sure all buttons are released
+        Keyboard.release('\t') ;
+        Keyboard.release('\n') ;
+      }
 
-      state = 0 ;
-      dataArrayIndex = 0 ;
-      initDisplay(state) ;
+      // Also end recording if red button pressed
+      if (buttonStopFlag){
+        buttonStopFlag = 0 ;
+        state = 0 ;
+        initDisplay(state) ;
+        // Reset Counters
+        dataArrayIndex = 0 ;
+        dataArrayCounter = 0 ;
+        dataArrayCounterSub = 0 ;
+        // If emergency stop, make sure all buttons are released
+        Keyboard.release('\t') ;
+        Keyboard.release('\n') ;
+      }
+
+      // Need to handle buttons even if not used
+      if (buttonStartFlag){
+        buttonStartFlag = 0 ;
+      }
+      if (buttonRateFlag){
+        buttonRateFlag = 0 ;
+      }
+      if (buttonTimeFlag){
+        buttonTimeFlag = 0 ;
+      }
+
+      // Need to handle data New flag even if not used
+      if (dataNewFlag){
+        dataNewFlag = 0 ;
+      }
+
     break;
   }
 
@@ -282,7 +361,7 @@ void updateRangeFinder(){
   //Read data from rangeFinder if interrupt triggered
   if (interruptFlag){
     interruptFlag = 0 ;
-    digitalWrite(PIN_LED, HIGH) ;
+    digitalWrite(PIN_INDICATOR, HIGH) ;
 
     //Read in the data
     rangeFinder.VL53L1X_GetDistance(&dataRaw) ;
@@ -291,7 +370,7 @@ void updateRangeFinder(){
 
     //Clear Interrupt for next data
     rangeFinder.VL53L1X_ClearInterrupt() ;
-    digitalWrite(PIN_LED, LOW) ;
+    digitalWrite(PIN_INDICATOR, LOW) ;
 
     // Calculate Filtered Position and velocity
     computeCoordinates(data) ;
@@ -302,36 +381,40 @@ void updateRangeFinder(){
 // Update Buttons
 void updateButtons(){
   //Check button states and set flags if they are pressed
-  if (!digitalRead(PIN_START) && !buttonStartToggle){
+  if (!digitalRead(PIN_START) && !buttonStartToggle && (millis() - buttonStartDebounce >= buttonDebounceWait)){
     buttonStartToggle = 1 ; 
     buttonStartFlag = 1 ;
     buttonStartDebounce = millis() ;
   } else if (digitalRead(PIN_START) && buttonStartToggle && (millis() - buttonStartDebounce >= buttonDebounceWait)){
     buttonStartToggle = 0 ;
+    buttonStartDebounce = millis() ;
   }
 
-  if (!digitalRead(PIN_STOP) && !buttonStopToggle){
+  if (!digitalRead(PIN_STOP) && !buttonStopToggle && (millis() - buttonStopDebounce >= buttonDebounceWait)){
     buttonStopToggle = 1 ; 
     buttonStopFlag = 1 ;
     buttonStopDebounce = millis() ;
   } else if (digitalRead(PIN_STOP) && buttonStopToggle && (millis() - buttonStopDebounce >= buttonDebounceWait)){
     buttonStopToggle = 0 ;
+    buttonStopDebounce = millis() ;
   }
 
-  if (!digitalRead(PIN_RATE) && !buttonRateToggle){
+  if (!digitalRead(PIN_RATE) && !buttonRateToggle && (millis() - buttonRateDebounce >= buttonDebounceWait)){
     buttonRateToggle = 1 ; 
     buttonRateFlag = 1 ;
     buttonRateDebounce = millis() ;
   } else if (digitalRead(PIN_RATE) && buttonRateToggle && (millis() - buttonRateDebounce >= buttonDebounceWait)){
     buttonRateToggle = 0 ;
+    buttonRateDebounce = millis() ;
   }
 
-  if (!digitalRead(PIN_TIME) && !buttonTimeToggle){
+  if (!digitalRead(PIN_TIME) && !buttonTimeToggle && (millis() - buttonTimeDebounce >= buttonDebounceWait)){
     buttonTimeToggle = 1 ; 
     buttonTimeFlag = 1 ;
     buttonTimeDebounce = millis() ;
   } else if (digitalRead(PIN_TIME) && buttonTimeToggle && (millis() - buttonTimeDebounce >= buttonDebounceWait)){
     buttonTimeToggle = 0 ;
+    buttonTimeDebounce = millis() ;
   }
 }
 
@@ -366,19 +449,19 @@ void initDisplay(int _state){
     case 0:
       // Display Distance
       display.setTextSize(2) ;
-      display.setCursor(22, 0) ;
+      display.setCursor(dataDistancePos[displayRotation][0], dataDistancePos[displayRotation][1]) ;
       formatPos(pos) ;
       display.print(posBuff) ;
       display.print("m") ;
       display.setTextSize(1) ;
 
       // Display options
-      display.setCursor(0, 24) ;
+      display.setCursor(dataFilterIntervalPos[displayRotation][0]-30, dataFilterIntervalPos[displayRotation][1]) ;
       display.print("Rate:") ;
       formatFilterInterval() ;
       display.print(dataFilterIntervalBuff) ;
 
-      display.setCursor(64, 24) ;
+      display.setCursor(dataRecordingIntervalPos[displayRotation][0]-30, dataRecordingIntervalPos[displayRotation][1]) ;
       display.print("Time:") ;
       formatRecordingInterval() ;
       display.print(dataRecordingIntervalBuff) ;
