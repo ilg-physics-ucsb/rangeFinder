@@ -113,6 +113,8 @@ void interruptRangeFinder() {
 
 // the setup function runs once when you press reset or power the board
 void setup() {
+  delay(500) ;
+
   // initialize GPIO pins
   pinMode(PIN_START, INPUT_PULLUP) ;
   pinMode(PIN_STOP,  INPUT_PULLUP) ;
