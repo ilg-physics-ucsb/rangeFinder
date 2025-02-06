@@ -24,7 +24,7 @@
 #define PIN_INTERRUPT 7   // Interrupt for the Range Finder
 #define PIN_SHUTDOWN 9    // Shutdown pin for the Range Finder
 
-#define DATA_ARRAY_MAX 10 
+#define DATA_AVG_MAX 10   // How manyt samples for the rolling average
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 VL53L1X rangeFinder(&Wire, PIN_SHUTDOWN);
@@ -32,26 +32,25 @@ VL53L1X rangeFinder(&Wire, PIN_SHUTDOWN);
 uint8_t dataFlag = 0 ;
 int dataStatus = 0 ;
 int objectNum = 0 ;
-unsigned long dataRawTime = 100 ; // Time for the sensor to average over 
+int dataRawTime = 50 ; // Time for the sensor to average over 
 uint16_t dataRaw = 0 ;
 float data = 0 ;
-float time = 0 ;         // Time of recorded data
-float dataArray[DATA_ARRAY_MAX] ;
-float timeArray[DATA_ARRAY_MAX] ;
-int dataIndex = 0 ;
+int dataAvg[DATA_AVG_MAX] ;
+unsigned long dataTime[DATA_AVG_MAX] ;
+int dataAvgIndex = 0 ;
 
-int dataRecordingIntervalIndex = 0 ;
-unsigned long dataRecordingInterval[] = {10000, 15000, 20000, 30000, 5000} ; //How long to record data in millis
-unsigned long dataRecordingTime = 0 ;
+int dataRecordingIntervalIndex = 4 ;
+unsigned long dataRecordingInterval[] = {10000, 15000, 20000, 30000, 5000} ; // How long to record data in millis
+int dataRecordingIntervalSize = 5 ;                                          // Number of entries in the array above
 unsigned long dataRecordingTimeStart = 0 ;
 char dataRecordingIntervalBuff[5] ;
 int dataRecordingIntervalPos[2][2] = { {94, 24}, {30, 0} } ;
 
 
 int dataFilterIntervalIndex = 0 ;
-unsigned long dataFilterInterval[] = {200, 500, 1000, 100};              // Time for the us to filter the sensors data over
+unsigned long dataFilterInterval[] = {1, 2, 5, 10, 20};              // Time for the us to filter the sensors data over as number of samples
+int dataFilterIntervalSize = 5 ;                                             // Number of entries in the array above
 unsigned long dataFilterTime = 0 ;    
-int dataFilterSamples = dataFilterInterval[dataFilterIntervalIndex]/dataRawTime ;
 char dataFilterIntervalBuff[5] ;   
 int dataFilterIntervalPos[2][2] = { {30, 24}, {94, 0} } ;
 
@@ -66,6 +65,7 @@ float alpha = 0.5 ;        // Factor for data smoothing
 float alphaInv = 1-alpha ;  // Precalculating 
 
 // Data to be stored and written to computer
+float time = 0 ;         // Time of recorded data
 float pos = 0 ;             // Smoothed data in m
 float vel = 0 ;             // Smoothed data of velocity in m/s
 char posBuff[5] ;
@@ -79,7 +79,7 @@ int dataArrayCounterSub = 0 ;
 float timeArray[1000] ;
 float posArray[1000] ;
 float velArray[1000] ;
-unsigned long keyboardDelay = 40 ;
+unsigned long keyboardDelay = 50 ;
 unsigned long keyboardTimer = 0 ;
 
 
@@ -87,6 +87,8 @@ int posPixelX = 0 ;
 int posPixelY = 0 ;
 int displayRotation = 0 ;
 int dataDistancePos[2][2] = { {22, 0}, {22, 16} } ;
+int dataUploadPos[2][2] = { {89, 0}, {3, 0} }  ;
+int dataCancelPos[2][2] = { {3, 0}, {89, 0} }  ;
 
 unsigned long displayInterval = 200 ;
 unsigned long displayTime = 0 ;
@@ -133,7 +135,9 @@ void setup() {
   rangeFinder.VL53L1X_Off();
   rangeFinder.InitSensor(0x29) ;
   rangeFinder.VL53L1X_SetROI(4, 4) ;
+  rangeFinder.VL53L1X_SetDistanceMode(2) ; // Medium Distance Mode
   rangeFinder.VL53L1X_SetTimingBudgetInMs(dataRawTime) ;
+  rangeFinder.VL53L1X_SetInterMeasurementInMs(dataRawTime) ;
   rangeFinder.VL53L1X_StartRanging() ;
 
   // Start up display
@@ -167,7 +171,7 @@ void loop() {
         displayTime = millis() ;
         display.setTextSize(2) ;
         display.setCursor(dataDistancePos[displayRotation][0], dataDistancePos[displayRotation][1]) ;
-        formatPos(pos) ;
+        formatPos((float)dataAvg[ mod(dataAvgIndex-1, DATA_AVG_MAX) ]/1000) ;
         display.print(posBuff) ;
         display.print("m") ;
         display.setTextSize(1) ;
@@ -185,7 +189,7 @@ void loop() {
       // Adjust the length of data collection
       if (buttonTimeFlag){
         buttonTimeFlag = 0 ;
-        dataRecordingIntervalIndex = (dataRecordingIntervalIndex+1)%5 ;
+        dataRecordingIntervalIndex = (dataRecordingIntervalIndex+1)%dataRecordingIntervalSize ;
         formatRecordingInterval() ;
         display.setCursor(dataRecordingIntervalPos[displayRotation][0], dataRecordingIntervalPos[displayRotation][1]) ;
         display.print(dataRecordingIntervalBuff) ;
@@ -195,11 +199,10 @@ void loop() {
       // Adjusts the rate at which data is taken
       if (buttonRateFlag){
         buttonRateFlag = 0 ;
-        dataFilterIntervalIndex = (dataFilterIntervalIndex+1)%4 ;
+        dataFilterIntervalIndex = (dataFilterIntervalIndex+1)%dataFilterIntervalSize ;
         formatFilterInterval() ;
         display.setCursor(dataFilterIntervalPos[displayRotation][0], dataFilterIntervalPos[displayRotation][1]) ;
         display.print(dataFilterIntervalBuff) ;
-        dataFilterSamples = dataFilterInterval[dataFilterIntervalIndex]/dataRawTime ;
         displayFlag = 1 ;
       }
 
@@ -266,6 +269,35 @@ void loop() {
       }
     break;
     case 2:
+      // Wait for user input to actually upload the data to your computer
+
+      // Start writing data if not canceled
+      if (buttonStartFlag){
+        buttonStartFlag = 0 ;
+        state = 3 ;
+        initDisplay(state) ;
+      }
+      // Do not record if canceled
+      if (buttonStopFlag){
+        buttonStopFlag = 0 ;
+        state = 0 ;
+        initDisplay(state) ;
+      }
+
+      // Need to handle buttons even if not used
+      if (buttonRateFlag){
+        buttonRateFlag = 0 ;
+      }
+      if (buttonTimeFlag){
+        buttonTimeFlag = 0 ;
+      }
+
+      // Need to handle data New flag even if not used
+      if (dataNewFlag){
+        dataNewFlag = 0 ;
+      }
+    break;
+    case 3:
       // Write mode: Triggered on end of recording mode, to write data to keyboard
 
 
@@ -300,9 +332,9 @@ void loop() {
 
         // Increment the Subcounter and if overflows, increment which data to write
         dataArrayCounterSub ++ ;
-        if (dataArrayCounterSub >= 8){
+        if (dataArrayCounterSub > 5){
           dataArrayCounterSub = 0 ;
-          dataArrayCounter += dataFilterSamples ;
+          dataArrayCounter += dataFilterInterval[dataFilterIntervalIndex] ;
         }
 
       }
@@ -371,8 +403,9 @@ void updateRangeFinder(){
 
     //Read in the data
     rangeFinder.VL53L1X_GetDistance(&dataRaw) ;
-    data = (float) dataRaw ;
-    dataRecordingTime = millis() ;
+    dataAvg[dataAvgIndex] = dataRaw ;
+    dataTime[dataAvgIndex] = millis() ;
+
 
     //Clear Interrupt for next data
     rangeFinder.VL53L1X_ClearInterrupt() ;
@@ -437,22 +470,13 @@ void updateDisplay(){
 // Utility Functions 
 //---------------------------------------------------------------------------------------------------------------------
 
-// Positive definite modulus
-int mod(int x, int y){
-  int val = x%y ;
-  if (val < 0){
-    val += y ;
-  }
-  return val ;
-}
-
 void initDisplay(int _state){
   // Clear the initialize a new screen
   // Used to switch cases or start up
-
-  display.clearDisplay() ;
   switch(_state){
     case 0:
+      display.clearDisplay() ;
+
       // Display Distance
       display.setTextSize(2) ;
       display.setCursor(dataDistancePos[displayRotation][0], dataDistancePos[displayRotation][1]) ;
@@ -473,11 +497,27 @@ void initDisplay(int _state){
       display.print(dataRecordingIntervalBuff) ;
     break;
     case 1:
+      display.clearDisplay() ;
+
       // Setup the graph for displaying
       display.drawFastVLine(0, 0, 32, SSD1306_WHITE) ;
       display.drawFastHLine(0, 31, 128, SSD1306_WHITE) ;
     break;
     case 2:
+      display.drawRect(dataUploadPos[displayRotation][0], dataUploadPos[displayRotation][1], 39, 11, SSD1306_WHITE) ;
+      display.drawRect(dataUploadPos[displayRotation][0]+1, dataUploadPos[displayRotation][1]+1, 37, 9, SSD1306_BLACK) ;
+      display.setCursor(dataUploadPos[displayRotation][0]+2, dataUploadPos[displayRotation][1]+2) ;
+      display.print("Upload") ;
+
+      display.drawRect(dataCancelPos[displayRotation][0], dataCancelPos[displayRotation][1], 39, 11, SSD1306_WHITE) ;
+      display.drawRect(dataCancelPos[displayRotation][0]+1, dataCancelPos[displayRotation][1]+1, 37, 9, SSD1306_BLACK) ;
+      display.setCursor(dataCancelPos[displayRotation][0]+2, dataCancelPos[displayRotation][1]+2) ;
+      display.print("Cancel") ;
+
+    break;
+    case 3:
+      display.clearDisplay() ;
+
       // Write Uploading for the blocking function 
       display.setTextSize(2) ;
       display.setCursor(10, 12) ;
@@ -491,20 +531,26 @@ void initDisplay(int _state){
 
 void computeCoordinates(int val){
   // Computes the position and velocity after every measurement
-  time = (float) (dataRecordingTime - dataRecordingTimeStart)/1000 ;
-  //pos = (float) alpha*( (data + dataLast)/2000 ) + alphaInv*posLast ;
-  pos = (float) data/1000 ;
-  //vel = (float) alpha*( (data - dataLastLast)/(time - timeLastLast)/1000 ) + alphaInv*velLast ;
-  vel = (float) (data - dataLast)/(time - timeLast)/1000 ;
+  time = (float) (dataTime[dataAvgIndex] - dataRecordingTimeStart)/1000 ;
+  pos = 0 ;
+  for (int i=0; i<DATA_AVG_MAX; i++){
+    pos += dataAvg[i] ;
+  }
+  pos = (pos/DATA_AVG_MAX)/1000 ;
+  vel = (float) (dataAvg[dataAvgIndex] - dataAvg[mod(dataAvgIndex+1, DATA_AVG_MAX)])/(dataTime[dataAvgIndex] - dataTime[mod(dataAvgIndex+1, DATA_AVG_MAX)]) ;
 
-  // Set last values for comparing to next time
-  dataLastLast = dataLast ;
-  dataLast = data ; 
-  timeLastLast = timeLast ;
-  timeLast = time ;
-  posLast = pos ;
-  velLast = vel ;
+  // Set array values for comparing to next time
+  dataAvgIndex = mod(dataAvgIndex+1, DATA_AVG_MAX) ;
   return ;
+}
+
+// Positive definite modulus
+int mod(int x, int y){
+  int val = x%y ;
+  if (val < 0){
+    val += y ;
+  }
+  return val ;
 }
 
 // Format the position as a string
@@ -548,7 +594,7 @@ void formatTime(float _time){
 
 // Format the options for printing
 void formatFilterInterval(){
-  float rate = (float) dataFilterInterval[dataFilterIntervalIndex] / 1000 ;
+  float rate = (float) dataFilterInterval[dataFilterIntervalIndex]*dataRawTime/1000 ;
   dataFilterIntervalBuff[0] = String( (int) floor(rate) % 10 )[0] ;
   dataFilterIntervalBuff[1] = '.' ;
   dataFilterIntervalBuff[2] = String( (int) floor(rate*10) % 10 )[0] ;
