@@ -1,14 +1,6 @@
-#include <Arduino.h>
-#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <vl53l1x_class.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <assert.h>
-#include <stdlib.h>
 #include <Keyboard.h>
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
