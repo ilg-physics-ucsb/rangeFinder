@@ -123,17 +123,6 @@ void setup() {
   pinMode(PIN_INDICATOR,   OUTPUT) ;
   attachInterrupt(PIN_INTERRUPT, interruptRangeFinder, RISING) ;
 
-  // Start up the rangefinder in interrupt mode
-  Wire.begin();
-  rangeFinder.begin();
-  rangeFinder.VL53L1X_Off();
-  rangeFinder.InitSensor(0x29) ;
-  rangeFinder.VL53L1X_SetROI(4, 4) ;
-  rangeFinder.VL53L1X_SetDistanceMode(2) ; // Medium Distance Mode
-  rangeFinder.VL53L1X_SetTimingBudgetInMs(dataRawTime) ;
-  rangeFinder.VL53L1X_SetInterMeasurementInMs(dataRawTime) ;
-  rangeFinder.VL53L1X_StartRanging() ;
-
   // Start up display
   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS) ;
   display.setTextSize(1) ;                             // Normal 1:1 pixel scale
@@ -144,6 +133,16 @@ void setup() {
     display.setRotation(2) ;
   }
   initDisplay(state) ;
+
+  // Start up the rangefinder in interrupt mode
+  rangeFinder.begin();
+  rangeFinder.VL53L1X_Off();
+  rangeFinder.InitSensor(0x29) ;
+  rangeFinder.VL53L1X_SetROI(4, 4) ;
+  rangeFinder.VL53L1X_SetDistanceMode(2) ; // Medium Distance Mode
+  rangeFinder.VL53L1X_SetTimingBudgetInMs(dataRawTime) ;
+  rangeFinder.VL53L1X_SetInterMeasurementInMs(dataRawTime) ;
+  rangeFinder.VL53L1X_StartRanging() ;
 
   //Initialize Keyboard
   Keyboard.begin() ;
@@ -276,6 +275,9 @@ void loop() {
         buttonStopFlag = 0 ;
         state = 0 ;
         initDisplay(state) ;
+        dataArrayIndex = 0 ;
+        dataArrayCounter = 0 ;
+        dataArrayCounterSub = 0 ;
       }
 
       // Need to handle buttons even if not used
