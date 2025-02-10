@@ -2,6 +2,7 @@
 #include <Adafruit_SSD1306.h>
 #include <vl53l1x_class.h>
 #include <Keyboard.h>
+#include <Adafruit_DotStar.h>
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
@@ -20,6 +21,7 @@
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 VL53L1X rangeFinder(&Wire, PIN_SHUTDOWN);
+Adafruit_DotStar onBoardLED(DOTSTAR_NUM, PIN_DOTSTAR_DATA, PIN_DOTSTAR_CLK, DOTSTAR_BRG);
 
 uint8_t dataFlag = 0 ;
 int dataStatus = 0 ;
@@ -113,7 +115,17 @@ void interruptRangeFinder() {
 
 // the setup function runs once when you press reset or power the board
 void setup() {
-  delay(500) ;
+  Serial.begin(115200);
+  while (!Serial) { // needed to keep leonardo/micro from starting too fast!
+    delay(10);
+  }
+  Serial.println("Begin Setup") ;
+
+  // Init on Board LED
+  onBoardLED.begin(); // Initialize pins for output
+  onBoardLED.setBrightness(80);
+  onBoardLED.show();  // Turn all LEDs off ASAP
+
 
   // initialize GPIO pins
   pinMode(PIN_START, INPUT_PULLUP) ;
@@ -121,9 +133,28 @@ void setup() {
   pinMode(PIN_TIME,  INPUT_PULLUP) ;
   pinMode(PIN_RATE,  INPUT_PULLUP) ;
   pinMode(PIN_INDICATOR,   OUTPUT) ;
+  pinMode(PIN_INTERRUPT, INPUT_PULLUP);
   attachInterrupt(PIN_INTERRUPT, interruptRangeFinder, RISING) ;
 
+  // Start up the rangefinder in interrupt mode
+  Serial.println("Init Range Finder") ;
+  onBoardLED.setPixelColor(0, 0, 255, 0) ; // Show the program through the LEDs
+  onBoardLED.show();
+  Wire.begin() ;
+  rangeFinder.begin();
+  rangeFinder.VL53L1X_Off();
+  rangeFinder.InitSensor(0x29) ;
+  rangeFinder.VL53L1X_SetROI(4, 4) ;
+  rangeFinder.VL53L1X_SetDistanceMode(2) ; // Medium Distance Mode
+  rangeFinder.VL53L1X_SetTimingBudgetInMs(dataRawTime) ;
+  rangeFinder.VL53L1X_SetInterMeasurementInMs(dataRawTime) ;
+  rangeFinder.VL53L1X_StartRanging() ;
+  onBoardLED.setPixelColor(0, 0, 0, 0) ; // Show the program through the LEDs
+  onBoardLED.show();
+
   // Start up display
+  onBoardLED.setPixelColor(0, 0, 0, 255) ; // Show the program through the LEDs
+  onBoardLED.show();
   display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS) ;
   display.setTextSize(1) ;                             // Normal 1:1 pixel scale
   display.setTextColor(SSD1306_WHITE, SSD1306_BLACK) ; // Draw white text
@@ -133,16 +164,8 @@ void setup() {
     display.setRotation(2) ;
   }
   initDisplay(state) ;
-
-  // Start up the rangefinder in interrupt mode
-  rangeFinder.begin();
-  rangeFinder.VL53L1X_Off();
-  rangeFinder.InitSensor(0x29) ;
-  rangeFinder.VL53L1X_SetROI(4, 4) ;
-  rangeFinder.VL53L1X_SetDistanceMode(2) ; // Medium Distance Mode
-  rangeFinder.VL53L1X_SetTimingBudgetInMs(dataRawTime) ;
-  rangeFinder.VL53L1X_SetInterMeasurementInMs(dataRawTime) ;
-  rangeFinder.VL53L1X_StartRanging() ;
+  onBoardLED.setPixelColor(0, 0, 0, 0) ; // Show the program through the LEDs
+  onBoardLED.show();
 
   //Initialize Keyboard
   Keyboard.begin() ;
@@ -395,7 +418,8 @@ void updateRangeFinder(){
   //Read data from rangeFinder if interrupt triggered
   if (interruptFlag){
     interruptFlag = 0 ;
-    digitalWrite(PIN_INDICATOR, HIGH) ;
+    onBoardLED.setPixelColor(0, 255, 0, 0) ; // Show the program through the LEDs
+    onBoardLED.show();
 
     //Read in the data
     rangeFinder.VL53L1X_GetDistance(&dataRaw) ;
@@ -405,8 +429,8 @@ void updateRangeFinder(){
 
     //Clear Interrupt for next data
     rangeFinder.VL53L1X_ClearInterrupt() ;
-    digitalWrite(PIN_INDICATOR, LOW) ;
-
+    onBoardLED.setPixelColor(0, 0, 0, 0) ; // Show the program through the LEDs
+    onBoardLED.show();
     // Calculate Filtered Position and velocity
     computeCoordinates(data) ;
     dataNewFlag = 1 ;
