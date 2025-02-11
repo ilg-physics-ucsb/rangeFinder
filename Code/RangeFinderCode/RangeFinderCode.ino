@@ -115,12 +115,6 @@ void interruptRangeFinder() {
 
 // the setup function runs once when you press reset or power the board
 void setup() {
-  Serial.begin(115200);
-  while (!Serial) { // needed to keep leonardo/micro from starting too fast!
-    delay(10);
-  }
-  Serial.println("Begin Setup") ;
-
   // Init on Board LED
   onBoardLED.begin(); // Initialize pins for output
   onBoardLED.setBrightness(80);
@@ -271,6 +265,9 @@ void loop() {
         buttonStopFlag = 0 ;
         state = 0 ;
         initDisplay(state) ;
+        dataArrayIndex = 0 ;
+        dataArrayCounter = 0 ;
+        dataArrayCounterSub = 0 ;
       }
 
       // Need to handle buttons even if not used
